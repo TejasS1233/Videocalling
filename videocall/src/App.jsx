@@ -2,10 +2,9 @@ import React, { useState, useEffect, useRef } from "react";
 import AgoraRTC from "agora-rtc-sdk-ng";
 import { Video, Mic, PhoneOff, VideoOff, MicOff, User } from "lucide-react";
 import "./App.css"; // Assuming you have a CSS file for styles
-const APP_ID = "5d19f71222b54f08b56d5593356cf80d";
-const TOKEN =
-  "007eJxTYMhoCenzmNm9kmPuPlHPGRoCaeErwoN2zubed/vWQa/+3nsKDKYphpZp5oZGRkZJpiZpBhZJpmYppqaWxsamZslpFgYp87LbMxoCGRleiysxMTJAIIjPzhCSWlySmZfOwAAAXq4ffw==";
-const CHANNEL = "Testing";
+const APP_ID = "YOUR APP ID HERE"; // Replace with your Agora App ID
+const TOKEN = "YOUR TOKEN HERE"; // Replace with your Agora token
+const CHANNEL = "YOUR CHANNEL NAME HERE"; // Replace with your channel name
 
 const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
@@ -128,7 +127,7 @@ function App() {
 
 const JoinScreen = ({ username, setUsername, onJoin }) => (
   <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white px-4 text-center">
-    <h1 className="text-4xl font-bold mb-4">Agora Video Call</h1>
+    <h1 className="text-4xl font-bold mb-4">Video Call</h1>
     <input
       type="text"
       value={username}
