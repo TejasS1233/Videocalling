@@ -1,75 +1,140 @@
 import React, { useState, useEffect, useRef } from "react";
 import AgoraRTC from "agora-rtc-sdk-ng";
-import { Video, Mic, PhoneOff, VideoOff, MicOff, User } from "lucide-react";
-import "./App.css"; // Assuming you have a CSS file for styles
-const APP_ID = "YOUR APP ID HERE"; // Replace with your Agora App ID
-const TOKEN = "YOUR TOKEN HERE"; // Replace with your Agora token
-const CHANNEL = "YOUR CHANNEL NAME HERE"; // Replace with your channel name
+import {
+  Video,
+  Mic,
+  PhoneOff,
+  VideoOff,
+  MicOff,
+  User,
+  AlertCircle,
+} from "lucide-react";
 
+// --- Credentials ---
+// IMPORTANT: Replace with your actual Agora credentials.
+// For production, use a token server instead of a hardcoded token.
+const APP_ID = "5d19f71222b54f08b56d5593356cf80d";
+const TOKEN =
+  "007eJxTYAjT55ugt+D1yuNrT1RWLZ6wMZupoY69ehmP/iX2GTyFwc4KDKYphpZp5oZGRkZJpiZpBhZJpmYppqaWxsamZslpFgYpy5raMxoCGRmybO4xMEIhiM/OEJJaXJKZl87AAAAW/B6N";
+const CHANNEL = "Testing";
+
+// Initialize the Agora client. This should be done outside the component
+// to prevent re-initialization on every render.
 const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
+// --- Main App Component ---
 function App() {
   const [localTracks, setLocalTracks] = useState([]);
   const [remoteUsers, setRemoteUsers] = useState({});
   const [isJoined, setIsJoined] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [isVideoMuted, setIsVideoMuted] = useState(false);
   const [username, setUsername] = useState("");
+  const [error, setError] = useState(null);
 
+  // Effect to handle component unmount and clean up resources
+  useEffect(() => {
+    return () => {
+      // This cleanup function runs when the component is about to unmount
+      if (client.connectionState === "CONNECTED") {
+        handleLeave();
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // The empty dependency array ensures this effect runs only once on mount and cleanup on unmount
+
+  // Effect to handle Agora client events
   useEffect(() => {
     const handleUserPublished = async (user, mediaType) => {
       await client.subscribe(user, mediaType);
-      setRemoteUsers((prev) => ({
-        ...prev,
-        [user.uid]: { ...user, displayName: user.uid },
+      setRemoteUsers((prevUsers) => ({
+        ...prevUsers,
+        [user.uid]: user,
       }));
-      if (mediaType === "video" && user.videoTrack) {
-        user.videoTrack.play(`remote-${user.uid}`);
-      }
-      if (mediaType === "audio" && user.audioTrack) {
-        user.audioTrack.play();
-      }
-    };
-
-    const handleUserUnpublished = (user, mediaType) => {
-      if (mediaType === "video" && user.videoTrack) user.videoTrack.stop();
-      if (mediaType === "audio" && user.audioTrack) user.audioTrack.stop();
     };
 
     const handleUserLeft = (user) => {
-      setRemoteUsers((prev) => {
-        const updated = { ...prev };
-        delete updated[user.uid];
-        return updated;
+      setRemoteUsers((prevUsers) => {
+        const newUsers = { ...prevUsers };
+        delete newUsers[user.uid];
+        return newUsers;
       });
     };
 
     client.on("user-published", handleUserPublished);
-    client.on("user-unpublished", handleUserUnpublished);
     client.on("user-left", handleUserLeft);
+    client.on("user-unpublished", handleUserLeft);
 
     return () => {
       client.off("user-published", handleUserPublished);
-      client.off("user-unpublished", handleUserUnpublished);
       client.off("user-left", handleUserLeft);
+      client.off("user-unpublished", handleUserLeft);
     };
   }, []);
 
   const handleJoin = async () => {
-    if (!username.trim()) return alert("Please enter a name!");
-    await client.join(APP_ID, CHANNEL, TOKEN, username);
-    const tracks = await AgoraRTC.createMicrophoneAndCameraTracks();
-    setLocalTracks(tracks);
-    await client.publish(tracks);
-    setIsJoined(true);
+    if (!username.trim()) {
+      setError("Please enter a name to join.");
+      return;
+    }
+    setError(null); // Clear previous errors
+
+    if (
+      client.connectionState === "CONNECTED" ||
+      client.connectionState === "CONNECTING"
+    ) {
+      return;
+    }
+
+    setIsJoining(true);
+    try {
+      await client.join(APP_ID, CHANNEL, TOKEN, username);
+
+      // --- FIX: Handle existing users in the channel ---
+      if (client.remoteUsers.length > 0) {
+        const existingUsers = {};
+        for (const user of client.remoteUsers) {
+          existingUsers[user.uid] = user;
+          // Subscribe to their tracks
+          if (user.hasVideo) {
+            await client.subscribe(user, "video");
+          }
+          if (user.hasAudio) {
+            await client.subscribe(user, "audio");
+          }
+        }
+        setRemoteUsers(existingUsers);
+      }
+
+      const tracks = await AgoraRTC.createMicrophoneAndCameraTracks();
+      setLocalTracks(tracks);
+      await client.publish(tracks);
+      setIsJoined(true);
+    } catch (err) {
+      console.error("Failed to join the channel", err);
+      if (err.code === "NOT_READABLE" || err.name === "NotReadableError") {
+        setError(
+          "Device in use. Please ensure your camera/microphone are not used by another tab or application."
+        );
+      } else {
+        setError("An unexpected error occurred. Please try again.");
+      }
+    } finally {
+      setIsJoining(false);
+    }
   };
 
   const handleLeave = async () => {
-    localTracks.forEach((track) => {
-      track.stop();
-      track.close();
-    });
-    await client.leave();
+    try {
+      for (let localTrack of localTracks) {
+        localTrack.stop();
+        localTrack.close();
+      }
+      await client.leave();
+    } catch (error) {
+      console.error("Failed to leave the channel", error);
+    }
     setLocalTracks([]);
     setRemoteUsers({});
     setIsJoined(false);
@@ -99,21 +164,20 @@ function App() {
         username={username}
         setUsername={setUsername}
         onJoin={handleJoin}
+        isJoining={isJoining}
+        error={error}
       />
     );
   }
 
   return (
     <div className="relative flex flex-col h-screen bg-gray-900 text-white font-sans">
-      {/* Video Grid */}
       <VideoGrid
         localTracks={localTracks}
         remoteUsers={remoteUsers}
         isVideoMuted={isVideoMuted}
         username={username}
       />
-
-      {/* Floating Control Bar */}
       <ControlBar
         onLeave={handleLeave}
         onToggleAudio={toggleAudio}
@@ -125,81 +189,101 @@ function App() {
   );
 }
 
-const JoinScreen = ({ username, setUsername, onJoin }) => (
+// --- UI Sub-components ---
+
+const JoinScreen = ({ username, setUsername, onJoin, isJoining, error }) => (
   <div className="flex flex-col items-center justify-center h-screen bg-gray-900 text-white px-4 text-center">
-    <h1 className="text-4xl font-bold mb-4">Video Call</h1>
-    <input
-      type="text"
-      value={username}
-      onChange={(e) => setUsername(e.target.value)}
-      placeholder="Enter your name"
-      className="mb-6 px-4 py-2 rounded-lg text-black w-full max-w-xs"
-    />
-    <button
-      onClick={onJoin}
-      className="bg-blue-600 hover:bg-blue-700 px-8 py-3 rounded-full shadow-md transition-transform transform hover:scale-105 w-full max-w-xs"
-    >
-      Join Call
-    </button>
+    <div className="w-full max-w-sm">
+      <h1 className="text-4xl md:text-5xl font-bold mb-4">Video Call</h1>
+      <p className="text-gray-400 mb-8">Enter your name to join the channel.</p>
+      <input
+        type="text"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        placeholder="Your Name"
+        className="mb-4 px-4 py-3 rounded-lg bg-gray-800 border border-gray-700 text-white w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+      />
+      {error && (
+        <div className="mb-4 p-3 bg-red-900/50 border border-red-700 text-red-300 rounded-lg flex items-center gap-2">
+          <AlertCircle size={20} />
+          <span>{error}</span>
+        </div>
+      )}
+      <button
+        onClick={onJoin}
+        disabled={isJoining}
+        className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:opacity-70 px-8 py-3 rounded-full shadow-lg transition-transform transform hover:scale-105 w-full font-semibold"
+      >
+        {isJoining ? "Joining..." : "Join Call"}
+      </button>
+    </div>
   </div>
 );
 
 const VideoGrid = ({ localTracks, remoteUsers, isVideoMuted, username }) => {
   const localVideoTrack = localTracks.find((t) => t.trackMediaType === "video");
-  const users = [
+  const allUsers = [
     {
       uid: "local",
       videoTrack: localVideoTrack,
-      muted: isVideoMuted,
+      isVideoMuted,
       displayName: username,
     },
     ...Object.values(remoteUsers),
   ];
 
-  const gridCols =
-    users.length === 1
-      ? "grid-cols-1"
-      : users.length === 2
-      ? "grid-cols-2"
-      : users.length <= 4
-      ? "grid-cols-2 md:grid-cols-2"
-      : "grid-cols-3";
+  const gridLayout = (userCount) => {
+    if (userCount === 1) return "grid-cols-1";
+    if (userCount === 2) return "grid-cols-1 sm:grid-cols-2";
+    if (userCount <= 4) return "grid-cols-2";
+    if (userCount <= 9) return "grid-cols-3";
+    return "grid-cols-4";
+  };
 
   return (
-    <main className="flex-1 p-2 sm:p-4">
-      <div className={`grid gap-2 sm:gap-4 h-full w-full ${gridCols}`}>
-        {users.map((user) => (
-          <VideoTile key={user.uid} user={user} />
+    <main className="flex-1 p-2 sm:p-4 overflow-hidden">
+      <div
+        className={`grid gap-2 sm:gap-4 h-full w-full ${gridLayout(
+          allUsers.length
+        )}`}
+      >
+        {allUsers.map((user) => (
+          <VideoTile
+            key={user.uid}
+            videoTrack={user.videoTrack}
+            // --- FIX: More reliable check for remote user's video state ---
+            isMuted={user.uid === "local" ? isVideoMuted : !user.videoTrack}
+            displayName={user.uid === "local" ? username : user.uid}
+          />
         ))}
       </div>
     </main>
   );
 };
 
-const VideoTile = ({ user }) => {
+const VideoTile = ({ videoTrack, isMuted, displayName }) => {
   const videoRef = useRef(null);
 
   useEffect(() => {
-    if (user.uid === "local" && user.videoTrack && videoRef.current) {
-      user.videoTrack.play(videoRef.current);
+    if (videoRef.current && videoTrack) {
+      videoTrack.play(videoRef.current);
     }
-  }, [user.videoTrack]);
+    return () => {
+      videoTrack?.stop();
+    };
+  }, [videoTrack]);
 
   return (
     <div className="relative bg-gray-800 rounded-xl overflow-hidden shadow-md aspect-video">
-      {user.uid === "local" ? (
-        <div ref={videoRef} className="w-full h-full" />
-      ) : (
-        <div id={`remote-${user.uid}`} className="w-full h-full" />
-      )}
-      {user.muted && (
+      <div ref={videoRef} className="w-full h-full" />
+      {isMuted && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-60 text-gray-300">
           <User size={48} />
-          <span className="mt-2 text-lg">{user.displayName || user.uid}</span>
+          <span className="mt-2 text-lg font-semibold">{displayName}</span>
         </div>
       )}
-      <div className="absolute bottom-2 left-2 bg-black bg-opacity-60 px-2 py-1 rounded text-sm">
-        {user.displayName || user.uid}
+      <div className="absolute bottom-2 left-2 bg-black bg-opacity-60 px-3 py-1 rounded-full text-sm font-medium backdrop-blur-sm">
+        {displayName}
       </div>
     </div>
   );
@@ -212,30 +296,45 @@ const ControlBar = ({
   isAudioMuted,
   isVideoMuted,
 }) => (
-  <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 flex gap-4 bg-gray-800 bg-opacity-80 px-6 py-3 rounded-full shadow-lg">
-    <ControlButton
-      Icon={isAudioMuted ? MicOff : Mic}
-      onClick={onToggleAudio}
-      isMuted={isAudioMuted}
-    />
-    <ControlButton
-      Icon={isVideoMuted ? VideoOff : Video}
-      onClick={onToggleVideo}
-      isMuted={isVideoMuted}
-    />
-    <ControlButton Icon={PhoneOff} onClick={onLeave} isHangUp />
+  <div className="w-full py-4 px-6">
+    <div className="max-w-xs mx-auto flex items-center justify-center gap-4">
+      <ControlButton
+        Icon={isAudioMuted ? MicOff : Mic}
+        onClick={onToggleAudio}
+        isMuted={isAudioMuted}
+        label="Toggle Audio"
+      />
+      <ControlButton
+        Icon={isVideoMuted ? VideoOff : Video}
+        onClick={onToggleVideo}
+        isMuted={isVideoMuted}
+        label="Toggle Video"
+      />
+      <ControlButton
+        Icon={PhoneOff}
+        onClick={onLeave}
+        isHangUp
+        label="Leave Call"
+      />
+    </div>
   </div>
 );
 
-const ControlButton = ({ Icon, onClick, isMuted, isHangUp }) => {
-  const baseClasses = "p-4 rounded-full transition transform hover:scale-110";
-  const colors = isHangUp
-    ? "bg-red-600 hover:bg-red-700"
-    : isMuted
-    ? "bg-red-500 hover:bg-red-600"
-    : "bg-gray-700 hover:bg-gray-600";
+const ControlButton = ({ Icon, onClick, isMuted, isHangUp = false, label }) => {
+  const baseClasses =
+    "p-4 rounded-full transition-all duration-300 transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900";
+
+  const colorClasses =
+    isHangUp || isMuted
+      ? "bg-red-600 hover:bg-red-700 focus:ring-red-500"
+      : "bg-gray-700 hover:bg-gray-600 focus:ring-gray-500";
+
   return (
-    <button onClick={onClick} className={`${baseClasses} ${colors}`}>
+    <button
+      aria-label={label}
+      onClick={onClick}
+      className={`${baseClasses} ${colorClasses}`}
+    >
       <Icon size={24} className="text-white" />
     </button>
   );
